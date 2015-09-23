@@ -12,6 +12,8 @@ import (
 	"runtime"
 )
 
+const DEFAULT_THRESHOLD_SIZE = 1024 * 1024
+
 type FileInfo struct {
 	path string
 	size int64
@@ -22,7 +24,7 @@ type FileInfo struct {
 // walkFiles start a goroutine to walk the directory tree at root and send the
 // path and size of each regular file on the FileInfo channel. It sends the result of the
 // walk on the error channel. If done is closed, walkFiles abandons its work.
-func walkFiles(done <-chan struct{}, root string) (<-chan FileInfo, <-chan error) {
+func walkFiles(done <-chan struct{}, root string, thresholdSize int64) (<-chan FileInfo, <-chan error) {
 	var d [md5.Size]byte;
 	fileinfos := make(chan FileInfo)
 	errc := make(chan error, 1)
@@ -40,6 +42,9 @@ func walkFiles(done <-chan struct{}, root string) (<-chan FileInfo, <-chan error
 				return nil
 			}
 			size := info.Size()
+			if size < thresholdSize {
+				return nil
+			}
 			_, ok := s[size]
 			if !ok {
 				prei, ok := m[size]
@@ -93,11 +98,11 @@ func runDigesters(done <-chan struct{}, in <-chan FileInfo) (<-chan FileInfo){
 	return c
 }
 
-func findDuplicatedFile(root string) {
+func findDuplicatedFile(root string, thresholdSize int64) {
 	done := make(chan struct{})
 	defer close(done)
 
-	fileinfos, errc := walkFiles(done, root)
+	fileinfos, errc := walkFiles(done, root, thresholdSize)
 	result := runDigesters(done, fileinfos)
 
 	for r := range result {
@@ -113,7 +118,7 @@ func main() {
 	app.Name = "dupdup"
 	app.HideHelp = true
 	app.Action = func(c *cli.Context) {
-		findDuplicatedFile(c.Args()[0])
+		findDuplicatedFile(c.Args()[0], DEFAULT_THRESHOLD_SIZE)
 	}
 	app.Run(os.Args)
 }
