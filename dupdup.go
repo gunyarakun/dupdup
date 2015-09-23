@@ -26,6 +26,10 @@ func walkFiles(done <-chan struct{}, root string) (<-chan FileInfo, <-chan error
 	var d [md5.Size]byte;
 	fileinfos := make(chan FileInfo)
 	errc := make(chan error, 1)
+
+	s := map[int64]bool{}
+	m := map[int64]FileInfo{}
+
 	go func() {
 		defer close(fileinfos)
 		errc <- filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -35,9 +39,21 @@ func walkFiles(done <-chan struct{}, root string) (<-chan FileInfo, <-chan error
 			if !info.Mode().IsRegular() {
 				return nil
 			}
+			size := info.Size()
+			_, ok := s[size]
+			if !ok {
+				prei, ok := m[size]
+				if ok {
+					fileinfos <- prei
+					s[size] = true
+				} else {
+					m[size] = FileInfo{path, size, d, nil}
+					return nil
+				}
+			}
 
 			select {
-			case fileinfos <- FileInfo{path, info.Size(), d, nil}:
+			case fileinfos <- FileInfo{path, size, d, nil}:
 			case <-done:
 				return errors.New("walk canceled")
 			}
@@ -45,32 +61,6 @@ func walkFiles(done <-chan struct{}, root string) (<-chan FileInfo, <-chan error
 		})
 	}()
 	return fileinfos, errc
-}
-
-func filterSameSize(done <-chan struct{}, in <-chan FileInfo) (<-chan FileInfo) {
-	out := make(chan FileInfo)
-	s := map[int64]bool{}
-	m := map[int64]FileInfo{}
-	go func() {
-		for {
-			i := <-in
-			log.Printf(`path: %s\n`, i.path)
-			_, ok := s[i.size]
-			if ok {
-				out <- i
-			} else {
-				prei, ok := m[i.size]
-				if ok {
-					out <- prei
-					out <- i
-					s[i.size] = true
-				} else {
-					m[i.size] = i
-				}
-			}
-		}
-	}()
-	return out
 }
 
 func digester(done <-chan struct{}, infos <-chan FileInfo, c chan<- FileInfo) {
@@ -108,17 +98,11 @@ func findDuplicatedFile(root string) {
 	defer close(done)
 
 	fileinfos, errc := walkFiles(done, root)
-	for r := range fileinfos {
-		log.Printf(`%s\t%d\n`, r.path, r.size)
-	}
-	/*
-	sfileinfos := filterSameSize(done, fileinfos)
-	result := runDigesters(done, sfileinfos)
+	result := runDigesters(done, fileinfos)
 
 	for r := range result {
 		log.Printf(`%s\t%d\t%x\n`, r.path, r.size, r.md5)
 	}
-	*/
 	if err := <-errc; err != nil {
 		return
 	}
