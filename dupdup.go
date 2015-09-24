@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/codegangsta/cli"
-	"log"
+//	"log"
 	"os"
 	"path/filepath"
 	"crypto/md5"
@@ -10,6 +10,9 @@ import (
 	"io/ioutil"
 	"sync"
 	"runtime"
+	"fmt"
+	"bytes"
+	"sort"
 )
 
 const DEFAULT_THRESHOLD_SIZE = 1024 * 1024
@@ -20,6 +23,13 @@ type FileInfo struct {
 	md5 [md5.Size]byte
 	err error
 }
+
+type FileInfoSlice []FileInfo
+
+func (s FileInfoSlice) Len() int { return len(s) }
+func (s FileInfoSlice) Less(i, j int) bool { return s[i].size > s[j].size || (s[i].size == s[j].size &&
+bytes.Compare(s[i].md5[:], s[j].md5[:]) < 0) }
+func (s FileInfoSlice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
 // walkFiles start a goroutine to walk the directory tree at root and send the
 // path and size of each regular file on the FileInfo channel. It sends the result of the
@@ -103,10 +113,18 @@ func findDuplicatedFile(root string, thresholdSize int64) {
 	defer close(done)
 
 	fileinfos, errc := walkFiles(done, root, thresholdSize)
-	result := runDigesters(done, fileinfos)
+	digests := runDigesters(done, fileinfos)
 
-	for r := range result {
-		log.Printf(`%s\t%d\t%x\n`, r.path, r.size, r.md5)
+	var result FileInfoSlice;
+
+	for r := range digests {
+		result = append(result, r)
+	}
+
+	sort.Sort(result)
+
+	for _, r := range result {
+		fmt.Printf("%s\t%d\t%032x\n", r.path, r.size, r.md5)
 	}
 	if err := <-errc; err != nil {
 		return
