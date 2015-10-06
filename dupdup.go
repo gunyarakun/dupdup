@@ -17,6 +17,11 @@ import (
 
 const DEFAULT_THRESHOLD_SIZE = 1024 * 1024
 
+type FileInfoUniqueKey struct {
+	size int64
+	md5 [md5.Size]byte
+}
+
 type FileInfo struct {
 	path string
 	size int64
@@ -108,22 +113,42 @@ func runDigesters(done <-chan struct{}, in <-chan FileInfo) (<-chan FileInfo){
 	return c
 }
 
+func findDuplicatedDigest(done <-chan struct{}, in <-chan FileInfo) FileInfoSlice{
+	var result FileInfoSlice
+
+	s := map[FileInfoUniqueKey]bool{}
+	m := map[FileInfoUniqueKey]FileInfo{}
+
+	for r := range in {
+		key := FileInfoUniqueKey{r.size, r.md5}
+		_, ok := s[key]
+		if !ok {
+			p, ok := m[key]
+			if ok {
+				result = append(result, p)
+				s[key] = true
+			} else {
+				m[key] = r
+				continue
+			}
+		}
+		result = append(result, r)
+	}
+
+	return result
+}
+
 func findDuplicatedFile(root string, thresholdSize int64) {
 	done := make(chan struct{})
 	defer close(done)
 
 	fileinfos, errc := walkFiles(done, root, thresholdSize)
 	digests := runDigesters(done, fileinfos)
+	results := findDuplicatedDigest(done, digests)
 
-	var result FileInfoSlice;
+	sort.Sort(results)
 
-	for r := range digests {
-		result = append(result, r)
-	}
-
-	sort.Sort(result)
-
-	for _, r := range result {
+	for _, r := range results {
 		fmt.Printf("%s\t%d\t%032x\n", r.path, r.size, r.md5)
 	}
 	if err := <-errc; err != nil {
